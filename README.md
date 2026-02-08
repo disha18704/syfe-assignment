@@ -4,44 +4,6 @@ A modular, multi-agent system that answers complex, cross-document questions by 
 
 ---
 
-## Table of Contents
-
-1. [Project Overview](#project-overview)
-2. [Architecture](#architecture)
-3. [MCP Specification](#mcp-specification)
-4. [A2A Design Choices](#a2a-design-choices)
-5. [Knowledge Base Design](#knowledge-base-design)
-6. [Setup & Installation](#setup--installation)
-7. [Usage](#usage)
-8. [Bonus Features](#bonus-features)
-9. [Self-Evaluation](#self-evaluation)
-
----
-
-## Project Overview
-
-This system acts as an internal research assistant that can answer complex technical questions requiring information from multiple internal documents. It is built around three core components:
-
-| Component | Role |
-|---|---|
-| **MCP Tool Server** | A standalone FastAPI web service that exposes a `document_retriever` tool via MCP-compliant endpoints. Uses ChromaDB for semantic search over the knowledge base. |
-| **Manager Agent** | An LLM-powered orchestrator that receives user questions, decides whether document retrieval is needed, calls the MCP server, and delegates synthesis to the Specialist. |
-| **Specialist Agent** | An LLM invocation with a specialized system prompt that synthesizes grounded, cited answers from retrieved context. |
-
-### Example Flow
-
-```
-User: "What caused the Q3 model performance improvement and how did the August incident affect it?"
-  → Manager Agent decides retrieval is needed
-  → Manager calls MCP Tool Server (document_retriever)
-  → MCP Server returns relevant snippets from q3_model_performance.md, data_pipeline_architecture.md, incident_report_aug.md
-  → Manager passes question + context to Specialist Agent
-  → Specialist synthesizes a cited answer
-  → Answer displayed to user
-```
-
----
-
 ## Architecture
 
 ```
@@ -187,16 +149,15 @@ The Manager Agent passes state to the Specialist via a **constructed prompt** �
 
 - **Pros:** No shared mutable state, easy to debug (full context is logged), no infrastructure overhead.
 - **Cons:** Context window limits could be an issue with very large knowledge bases.
-- **Alternative considered:** Shared database/message queue — overkill for a prototype and adds infrastructure complexity without benefit at this scale.
 
 ### Protocol Definition
 
 The agents communicate via **direct function calls** within the orchestration script:
 - Manager calls `specialist.run(question, context_snippets)`.
 - This is a synchronous, in-process call.
-- For a production system, this could evolve into HTTP calls between microservices, or a message queue (e.g., Redis Pub/Sub, RabbitMQ).
+- For a production system, this could evolve into HTTP calls between microservices, or a message queue.
 
-The choice of direct function calls is explicitly appropriate for a prototype (as noted in the assignment) and avoids unnecessary infrastructure.
+I made the choice of direct function calls to avoid avoids unnecessary infrastructure.
 
 ### Specialization
 
@@ -211,19 +172,7 @@ The Manager is never asked to write the final answer. The Specialist is never as
 
 ---
 
-## Knowledge Base Design
-
-The knowledge base contains 5 interlinked documents simulating an ML team's internal documentation:
-
-| Document | Topic | Key Cross-Links |
-|---|---|---|
-| `q3_model_performance.md` | Q3 metrics, accuracy gains, model migration | References pipeline, incident |
-| `data_pipeline_architecture.md` | Airflow ETL, Feast, Great Expectations | References incident, team |
-| `feature_roadmap.md` | Q4 plans: real-time inference, A/B testing | References team, pipeline |
-| `incident_report_aug.md` | August 15 pipeline outage | References pipeline, Q3 performance |
-| `team_structure.md` | Team members, roles, ownership | Referenced by all other docs |
-
-### Cross-Document Synthesis
+### Knowledge Base Design
 
 The documents are intentionally designed so that important questions require information from multiple sources:
 
@@ -241,7 +190,7 @@ Each chunk stored in ChromaDB carries metadata (`source` filename + `section` he
 
 ### Prerequisites
 
-- Python 3.10+
+- Python 3.12.8
 - An OpenAI API key
 
 ### Step 1: Clone and Install
@@ -252,7 +201,7 @@ cd syfe
 
 # Create and activate virtual environment
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+source venv/bin/activate
 
 # Install dependencies
 pip install -r requirements.txt
@@ -272,8 +221,6 @@ In **Terminal 1**:
 ```bash
 uvicorn mcp_server.server:app --host 0.0.0.0 --port 8000
 ```
-
-You should see logs indicating the knowledge base has been indexed. You can verify the server is running by visiting `http://localhost:8000/docs` for the Swagger UI.
 
 ### Step 4: Run the Orchestration Script
 
@@ -343,7 +290,7 @@ All key events are logged using Python's `logging` module:
 - Retrieved snippet details (source, section, relevance score)
 - The full prompt sent to the Specialist (at DEBUG level)
 
-Logs are written to both the console and `system.log` file for post-hoc review.
+Logs are written to both the console and `system.log` file.
 
 ### Configuration Management
 
@@ -362,10 +309,19 @@ A `Dockerfile` and `docker-compose.yml` are provided to run the entire system in
 #### Running with Docker
 
 ```bash
-docker-compose up --build
-```
+# Build and start both services in the background
+docker-compose up --build -d
 
-This starts both the MCP server and the interactive CLI. The orchestrator container attaches to stdin for interactive use.
+# Wait ~2 minutes for the MCP server to download the embedding model and index documents
+# You can check progress with:
+docker logs -f mcp-tool-server
+
+# Once you see "MCP Tool Server is ready", attach to the orchestrator to ask questions:
+docker attach a2a-orchestrator
+
+# To stop everything:
+docker-compose down
+```
 
 ---
 
@@ -387,11 +343,3 @@ This starts both the MCP server and the interactive CLI. The orchestrator contai
 - **No conversation memory:** Each question is independent. Multi-turn conversation would require session state.
 - **No evaluation framework:** There are no automated tests for retrieval quality or answer correctness.
 - **Simplified MCP:** The protocol implementation covers discovery and invocation but does not implement the full MCP specification (e.g., streaming, authentication).
-
-### Future Improvements
-
-- Add multi-turn conversation support with session context.
-- Implement retrieval evaluation (precision@k, recall).
-- Add streaming responses for better UX.
-- Expand to multiple specialist agents (e.g., financial analyst, security expert).
-- Add authentication to the MCP server.
